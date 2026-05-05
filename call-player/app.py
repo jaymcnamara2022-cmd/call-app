@@ -3,7 +3,7 @@ import requests
 import re
 import json
 import os
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 
 app = Flask(__name__, static_folder='static')
 
@@ -21,7 +21,6 @@ def check_auth():
     return (request.headers.get('X-App-Secret') or request.args.get('secret', '')) == secret
 
 def fathom_session(req):
-    """Pull session cookie from env or the forwarded request header."""
     return (req.headers.get('X-Fathom-Session') or
             os.environ.get('FATHOM_SESSION', ''))
 
@@ -41,12 +40,11 @@ def static_files(path):
 def health():
     api_key = os.environ.get('FATHOM_API_KEY', '')
     needs_secret = bool(os.environ.get('APP_SECRET', ''))
-    authed = check_auth()
     return jsonify({
         'ok': bool(api_key),
         'api_key_set': bool(api_key),
         'needs_secret': needs_secret,
-        'authed': authed,
+        'authed': check_auth(),
         'session_set': bool(os.environ.get('FATHOM_SESSION', '')),
     })
 
@@ -57,10 +55,12 @@ def list_calls():
     if not check_auth():
         return jsonify({'error': 'Unauthorized'}), 401
 
-    params = {'limit': request.args.get('limit', 20)}
-    cursor = request.args.get('cursor')
-    if cursor:
-        params['cursor'] = cursor
+    user_email = os.environ.get('FATHOM_USER_EMAIL', '')
+    params = [('limit', request.args.get('limit', 20))]
+    if request.args.get('cursor'):
+        params.append(('cursor', request.args.get('cursor')))
+    if user_email:
+        params.append(('recorded_by[]', user_email))
 
     resp = requests.get(f'{FATHOM_API}/meetings', headers=fathom_headers(),
                         params=params, timeout=20)
@@ -88,24 +88,46 @@ def get_video(recording_id):
     if not check_auth():
         return jsonify({'error': 'Unauthorized'}), 401
 
-    share_url = _find_share_url(recording_id)
-    if not share_url:
+    meeting = _find_meeting(recording_id)
+    if not meeting:
         return jsonify({'error': 'Meeting not found'}), 404
 
-    session = fathom_session(request)
-    result = _extract_video_url(share_url, session)
+    url       = meeting.get('url', '')
+    share_url = meeting.get('share_url', '')
+    session   = fathom_session(request)
 
+    # Extract numeric call ID from either URL field
+    # Pattern: https://fathom.video/calls/662363819
+    call_id = None
+    for candidate in [url, share_url]:
+        m = re.search(r'fathom\.video/calls/(\d+)', candidate or '')
+        if m:
+            call_id = m.group(1)
+            break
+
+    if call_id and session:
+        result = _fetch_video_via_redirect(call_id, session)
+        if result:
+            return jsonify({'url': result, 'type': 'hls', 'share_url': share_url or url})
+
+    # Fall back to page-scraping strategies
+    result = _extract_video_from_page(share_url or url, session)
     if result.get('url'):
-        return jsonify({'url': result['url'], 'type': result.get('type'), 'share_url': share_url})
+        return jsonify({'url': result['url'], 'type': result.get('type'), 'share_url': share_url or url})
 
-    return jsonify({'share_url': share_url, 'fallback': True})
+    return jsonify({'share_url': share_url or url, 'fallback': True})
 
-def _find_share_url(recording_id):
+
+def _find_meeting(recording_id):
+    """Page through meetings until we find the one matching recording_id."""
     cursor = None
-    for _ in range(5):
-        params = {'limit': 100}
+    user_email = os.environ.get('FATHOM_USER_EMAIL', '')
+    for _ in range(10):
+        params = [('limit', 100)]
         if cursor:
-            params['cursor'] = cursor
+            params.append(('cursor', cursor))
+        if user_email:
+            params.append(('recorded_by[]', user_email))
         resp = requests.get(f'{FATHOM_API}/meetings', headers=fathom_headers(),
                             params=params, timeout=20)
         if not resp.ok:
@@ -113,20 +135,57 @@ def _find_share_url(recording_id):
         data = resp.json()
         for item in data.get('items', []):
             if item.get('recording_id') == recording_id:
-                return item.get('share_url') or item.get('url', '')
+                return item
         cursor = data.get('next_cursor')
         if not cursor:
             break
     return None
 
-def _extract_video_url(share_url, session_cookie=''):
+
+def _fetch_video_via_redirect(call_id, session_cookie):
+    """
+    Hit https://fathom.video/calls/{id}/video.m3u8 with the session cookie.
+    Fathom returns a 302 redirect to the actual CDN stream URL.
+    We return that CDN URL so the frontend can play it directly.
+    """
+    video_endpoint = f'https://fathom.video/calls/{call_id}/video.m3u8'
+    headers = {
+        'User-Agent': ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                       'AppleWebKit/537.36 (KHTML, like Gecko) '
+                       'Chrome/122.0.0.0 Safari/537.36'),
+        'Cookie': session_cookie,
+        'Referer': f'https://fathom.video/calls/{call_id}',
+        'Accept': '*/*',
+        'Origin': 'https://fathom.video',
+    }
+    try:
+        resp = requests.get(video_endpoint, headers=headers,
+                            allow_redirects=False, timeout=10)
+        if resp.status_code in (301, 302, 303, 307, 308):
+            location = resp.headers.get('Location', '')
+            if location and location.startswith('http'):
+                print(f'Video CDN URL: {location[:80]}')
+                return location
+        elif resp.status_code == 200:
+            # No redirect — proxy the Fathom endpoint directly
+            return f'/api/proxy/video?url={quote(video_endpoint)}'
+        else:
+            print(f'Video endpoint returned {resp.status_code}')
+    except Exception as e:
+        print(f'Video redirect error: {e}')
+    return None
+
+
+def _extract_video_from_page(share_url, session_cookie=''):
+    """Fallback: scrape the share page for video URLs."""
+    if not share_url:
+        return {}
     try:
         headers = {
             'User-Agent': ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
                            'AppleWebKit/537.36 (KHTML, like Gecko) '
                            'Chrome/122.0.0.0 Safari/537.36'),
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
         }
         if session_cookie:
             headers['Cookie'] = session_cookie
@@ -134,7 +193,7 @@ def _extract_video_url(share_url, session_cookie=''):
         resp = requests.get(share_url, headers=headers, timeout=15, allow_redirects=True)
         html = resp.text
 
-        # Strategy 1: Next.js SSR data blob
+        # Next.js SSR data
         m = re.search(r'<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)</script>', html)
         if m:
             try:
@@ -144,38 +203,25 @@ def _extract_video_url(share_url, session_cookie=''):
             except Exception:
                 pass
 
-        # Strategy 2: Mux / HLS / MP4 URL patterns in raw HTML
-        patterns = [
+        # Direct URL patterns
+        for pat, media_type in [
             (r'https://stream\.mux\.com/[A-Za-z0-9_-]+\.m3u8(?:\?[^\s"\'<>]*)?', 'hls'),
-            (r'https://[a-z0-9-]+\.cloudflarestream\.com/[a-f0-9]+/manifest/video\.m3u8(?:\?[^\s"\'<>]*)?', 'hls'),
             (r'https://[^\s"\'<>]+\.m3u8(?:\?[^\s"\'<>]*)?', 'hls'),
             (r'"(https://[^\s"\'<>]+\.mp4(?:\?[^\s"\'<>]*)?)"', 'mp4'),
-        ]
-        for pat, media_type in patterns:
+        ]:
             m = re.search(pat, html)
             if m:
                 url = m.group(1) if m.lastindex else m.group(0)
                 if url.startswith('https://'):
                     return {'url': url, 'type': media_type}
-
-        # Strategy 3: og:video meta tag
-        for pat in [
-            r'<meta[^>]+property="og:video(?::url)?"[^>]+content="([^"]+)"',
-            r'<meta[^>]+content="([^"]+)"[^>]+property="og:video(?::url)?"',
-        ]:
-            m = re.search(pat, html, re.IGNORECASE)
-            if m:
-                return {'url': m.group(1), 'type': 'unknown'}
-
     except Exception as e:
-        print(f'Video extraction error: {e}')
-
+        print(f'Page scrape error: {e}')
     return {}
+
 
 def _find_video_in_obj(obj, depth=0):
     if depth > 12:
         return None
-
     if isinstance(obj, str):
         for pat, t in [
             (r'^https://stream\.mux\.com/[A-Za-z0-9_-]+\.m3u8', 'hls'),
@@ -185,12 +231,8 @@ def _find_video_in_obj(obj, depth=0):
             if re.match(pat, obj):
                 return {'url': obj, 'type': t}
         return None
-
     if isinstance(obj, dict):
-        priority_keys = ['videoUrl', 'video_url', 'playbackUrl', 'playback_url',
-                         'hlsUrl', 'hls_url', 'streamUrl', 'stream_url',
-                         'mediaUrl', 'media_url', 'src', 'source', 'mp4Url', 'mp4_url']
-        for key in priority_keys:
+        for key in ['videoUrl', 'video_url', 'playbackUrl', 'hlsUrl', 'streamUrl', 'src']:
             if key in obj and isinstance(obj[key], str):
                 r = _find_video_in_obj(obj[key], depth + 1)
                 if r:
@@ -200,20 +242,19 @@ def _find_video_in_obj(obj, depth=0):
                 r = _find_video_in_obj(v, depth + 1)
                 if r:
                     return r
-
     if isinstance(obj, list):
         for item in obj[:30]:
             r = _find_video_in_obj(item, depth + 1)
             if r:
                 return r
-
     return None
 
-# ── Video proxy (handles CORS + auth for CDN streams) ─────────────────────────
+# ── Video proxy ───────────────────────────────────────────────────────────────
 
 ALLOWED_PROXY_DOMAINS = [
     'stream.mux.com', 'cloudflarestream.com', 'videodelivery.net',
-    'fathom.video', 'fathom.ai', 'amazonaws.com', 'googleapis.com',
+    'fathom.video', 'fathom.ai', 'amazonaws.com', 'cloudfront.net',
+    'googleapis.com', 'googleusercontent.com',
 ]
 
 @app.route('/api/proxy/video')
