@@ -96,14 +96,20 @@ def get_video(recording_id):
     share_url = meeting.get('share_url', '')
     session   = fathom_session(request)
 
-    # Extract numeric call ID from either URL field
-    # Pattern: https://fathom.video/calls/662363819
+    # Extract call ID from either URL field (numeric or alphanumeric)
     call_id = None
     for candidate in [url, share_url]:
-        m = re.search(r'fathom\.video/calls/(\d+)', candidate or '')
+        m = re.search(r'fathom\.video/calls/([A-Za-z0-9_-]+)', candidate or '')
         if m:
             call_id = m.group(1)
             break
+
+    debug = {
+        'url': url, 'share_url': share_url,
+        'call_id': call_id, 'has_session': bool(session),
+        'session_len': len(session),
+    }
+    print(f'[video] debug={debug}', flush=True)
 
     if call_id and session:
         result = _fetch_video_via_redirect(call_id, session)
@@ -115,7 +121,7 @@ def get_video(recording_id):
     if result.get('url'):
         return jsonify({'url': result['url'], 'type': result.get('type'), 'share_url': share_url or url})
 
-    return jsonify({'share_url': share_url or url, 'fallback': True})
+    return jsonify({'share_url': share_url or url, 'fallback': True, 'debug': debug})
 
 
 def _find_meeting(recording_id):
