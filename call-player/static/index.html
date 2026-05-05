@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Call Player">
+  <meta name="theme-color" content="#0d0d0f">
+  <title>Call Player</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<!-- ── SETUP SCREEN (first launch / error) ─────────────────────────────── -->
+<div id="setup-screen" class="screen">
+  <div class="setup-inner">
+    <div class="app-logo">
+      <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+        <rect width="64" height="64" rx="16" fill="#6366f1"/>
+        <polygon points="22,14 52,32 22,50" fill="white"/>
+        <rect x="8" y="27" width="8" height="10" rx="2" fill="white" opacity="0.55"/>
+      </svg>
+    </div>
+    <h1>Call Player</h1>
+    <p class="subtitle" id="setup-subtitle">Connecting to your Fathom account…</p>
+
+    <!-- Password prompt (if APP_SECRET is set) -->
+    <div id="secret-form" style="display:none; width:100%">
+      <div class="field-group">
+        <label class="field-label">App Password</label>
+        <input type="password" id="secret-input" class="field-input" placeholder="Enter your app password" autocomplete="current-password">
+      </div>
+      <button class="primary-btn" id="secret-submit">Continue</button>
+    </div>
+
+    <!-- Error state -->
+    <div id="setup-error" style="display:none; width:100%">
+      <div class="error-card" id="setup-error-msg"></div>
+      <button class="primary-btn" id="retry-btn">Retry</button>
+    </div>
+
+    <div class="spinner" id="setup-spinner"></div>
+  </div>
+</div>
+
+<!-- ── CALLS SCREEN ─────────────────────────────────────────────────────── -->
+<div id="calls-screen" class="screen">
+
+  <div class="calls-header">
+    <div class="calls-title-row">
+      <h2>My Calls</h2>
+      <button class="icon-btn" id="settings-btn" aria-label="Settings">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </div>
+    <div class="search-wrap calls-search">
+      <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      <input type="search" id="calls-search" placeholder="Search calls…" autocomplete="off" autocorrect="off" spellcheck="false">
+      <button class="search-clear" id="calls-search-clear" style="display:none" aria-label="Clear">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="calls-list" id="calls-list">
+    <div class="calls-loading" id="calls-loading">
+      <div class="spinner"></div>
+      <span>Loading calls…</span>
+    </div>
+    <div class="calls-empty" id="calls-empty" style="display:none">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4">
+        <polygon points="23 7 16 12 23 17 23 7"/>
+        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+      </svg>
+      <p>No calls found</p>
+    </div>
+  </div>
+
+  <div class="load-more-wrap" id="load-more-wrap" style="display:none">
+    <button class="load-more-btn" id="load-more-btn">Load more</button>
+  </div>
+</div>
+
+<!-- ── SETTINGS SHEET ───────────────────────────────────────────────────── -->
+<div id="settings-sheet" class="sheet" style="display:none">
+  <div class="sheet-backdrop" id="sheet-backdrop"></div>
+  <div class="sheet-panel">
+    <div class="sheet-handle"></div>
+    <h3 class="sheet-title">Settings</h3>
+
+    <div class="settings-section">
+      <div class="settings-label">Connection</div>
+      <div class="settings-row">
+        <span>Fathom API</span>
+        <span class="status-dot" id="api-status-dot"></span>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-label">Video Access</div>
+      <p class="settings-hint">
+        To enable native video playback, paste your Fathom session cookie below.
+        Get it by opening <strong>fathom.video</strong> in a desktop browser →
+        DevTools (⌘⌥I) → Application tab → Cookies → fathom.video →
+        copy all cookie values.
+      </p>
+      <textarea id="session-cookie-input" class="field-input textarea" placeholder="Paste cookie string here…" rows="3" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+      <button class="primary-btn" id="save-session-btn">Save &amp; Test</button>
+      <div class="session-status" id="session-status"></div>
+    </div>
+
+    <button class="ghost-btn" id="close-settings-btn">Done</button>
+  </div>
+</div>
+
+<!-- ── PLAYER SCREEN ─────────────────────────────────────────────────────── -->
+<div id="player-screen" class="screen">
+
+  <div class="player-header">
+    <button class="back-btn" id="back-btn" aria-label="Back to calls">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polyline points="15 18 9 12 15 6"/>
+      </svg>
+    </button>
+    <div class="call-meta">
+      <div class="call-title" id="call-title">Loading…</div>
+      <div class="call-date" id="call-date"></div>
+    </div>
+    <div style="width:36px"></div>
+  </div>
+
+  <!-- Media area: video or audio placeholder -->
+  <div class="media-area" id="media-area">
+    <video id="video" playsinline preload="metadata" style="display:none"></video>
+    <div class="media-loading" id="media-loading">
+      <div class="spinner"></div>
+    </div>
+    <div class="no-video" id="no-video" style="display:none">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4">
+        <polygon points="23 7 16 12 23 17 23 7"/>
+        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+      </svg>
+      <span>Video not available</span>
+      <a id="open-fathom-link" href="#" target="_blank" class="open-fathom-btn">Open in Fathom</a>
+    </div>
+    <div class="video-overlay" id="video-overlay">
+      <button class="overlay-play-btn" id="overlay-play-btn" aria-label="Play">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls" id="controls" style="display:none">
+    <div class="progress-row">
+      <span class="time-label" id="current-time">0:00</span>
+      <div class="progress-bar-wrap" id="progress-bar-wrap">
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="progress-fill"></div>
+          <div class="progress-thumb" id="progress-thumb"></div>
+        </div>
+      </div>
+      <span class="time-label" id="total-time" style="text-align:right">0:00</span>
+    </div>
+    <div class="controls-row">
+      <button class="ctrl-btn" id="skip-back" aria-label="Back 10s">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="1 4 1 10 7 10"/>
+          <path d="M3.51 15a9 9 0 1 0 .49-4.85"/>
+        </svg>
+        <span class="skip-label">10</span>
+      </button>
+      <button class="play-btn" id="play-pause" aria-label="Play/Pause">
+        <svg id="play-icon" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        <svg id="pause-icon" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+      </button>
+      <button class="ctrl-btn" id="skip-fwd" aria-label="Forward 10s">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="23 4 23 10 17 10"/>
+          <path d="M20.49 15a9 9 0 1 1-.49-4.85"/>
+        </svg>
+        <span class="skip-label">10</span>
+      </button>
+      <button class="speed-btn" id="speed-btn">1×</button>
+    </div>
+  </div>
+
+  <!-- Transcript panel -->
+  <div class="transcript-panel" id="transcript-panel">
+    <div class="transcript-header">
+      <div class="search-wrap">
+        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="search" id="search-input" placeholder="Search transcript…" autocomplete="off" autocorrect="off" spellcheck="false">
+        <button class="search-clear" id="search-clear" style="display:none" aria-label="Clear">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="search-nav" id="search-nav" style="display:none">
+        <span class="match-count" id="match-count"></span>
+        <button class="nav-btn" id="prev-match"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg></button>
+        <button class="nav-btn" id="next-match"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></button>
+      </div>
+    </div>
+    <div class="transcript-list" id="transcript-list">
+      <div class="transcript-loading" id="transcript-loading">
+        <div class="spinner"></div>
+        <span>Loading transcript…</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
